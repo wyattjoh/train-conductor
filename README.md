@@ -18,7 +18,13 @@ post-setup scripts.
 
 ## Installation
 
-### From JSR (recommended)
+### Homebrew (recommended)
+
+```bash
+brew install wyattjoh/stable/conduit
+```
+
+### From JSR
 
 Requires [Deno](https://deno.land/) v2.0 or later.
 
