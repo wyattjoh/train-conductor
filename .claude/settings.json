@@ -1,0 +1,20 @@
+{
+  "enabledPlugins": {
+    "deno-lsp@wyattjoh-marketplace": true,
+    "typescript-lsp@claude-plugins-official": false
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path' | { read file_path; if [[ \"$file_path\" =~ \\.(ts|tsx|js|jsx|json|md)$ ]]; then deno fmt \"$file_path\" 2>/dev/null || true; fi; }",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
