@@ -18,9 +18,21 @@ worktrees, with support for running post-setup scripts.
 
 ## Installation
 
-### From source (recommended)
+### From JSR (recommended)
 
 Requires [Deno](https://deno.land/) v2.0 or later.
+
+```bash
+deno install -g --allow-read --allow-write --allow-run --allow-env -n train-conductor jsr:@wyattjoh/train-conductor
+```
+
+### Run without installing
+
+```bash
+deno run --allow-read --allow-write --allow-run --allow-env jsr:@wyattjoh/train-conductor
+```
+
+### From source
 
 ```bash
 # Clone the repository
@@ -34,18 +46,10 @@ deno task install
 ### Compile to standalone binary
 
 ```bash
-# Compile to a single executable
 deno task compile
 
 # Move to your PATH
 mv train-conductor ~/.local/bin/
-```
-
-### Run directly with Deno
-
-```bash
-deno run --allow-read --allow-write --allow-run --allow-env \
-  https://raw.githubusercontent.com/wyattjoh/train-conductor/main/src/main.ts
 ```
 
 ## Usage
