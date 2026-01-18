@@ -9,7 +9,6 @@
 
 import { bold, cyan, gray, green, red, yellow } from "@std/fmt/colors";
 import { parseArgs } from "@std/cli/parse-args";
-import { fromFileUrl, join } from "@std/path";
 import type { CliOptions, ExecutionContext } from "./types.ts";
 import { loadConfig, SYMLINKS_OPERATION } from "./config.ts";
 import {
@@ -21,19 +20,10 @@ import {
 import { printSymlinkSummary, processSymlinks } from "./symlinks.ts";
 import { printScriptSummary, runScripts } from "./scripts.ts";
 import { showInteractiveMenu } from "./interactive.ts";
+import denoConfig from "../deno.json" with { type: "json" };
 
-/** Read version from deno.json to maintain single source of truth */
-async function getVersion(): Promise<string> {
-  try {
-    const moduleDir = fromFileUrl(new URL(".", import.meta.url));
-    const denoJsonPath = join(moduleDir, "..", "deno.json");
-    const content = await Deno.readTextFile(denoJsonPath);
-    const json = JSON.parse(content) as { version?: string };
-    return json.version ?? "unknown";
-  } catch {
-    return "unknown";
-  }
-}
+/** Version from deno.json, bundled at compile time */
+const VERSION = denoConfig.version;
 
 /** Generate help text with version */
 function getHelpText(version: string): string {
@@ -198,17 +188,16 @@ async function runSetupInWorktree(
  */
 async function main(): Promise<void> {
   const options = parseCliArgs(Deno.args);
-  const version = await getVersion();
 
   // Handle --help
   if (options.help) {
-    console.log(getHelpText(version));
+    console.log(getHelpText(VERSION));
     Deno.exit(0);
   }
 
   // Handle --version (check for explicit version flag in args)
   if (Deno.args.includes("--version")) {
-    console.log(`🚂 train-conductor v${version}`);
+    console.log(`🚂 train-conductor v${VERSION}`);
     Deno.exit(0);
   }
 
