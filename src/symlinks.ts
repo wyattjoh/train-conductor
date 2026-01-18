@@ -5,10 +5,38 @@
 import { dirname, join, relative } from "@std/path";
 import { ensureDir, expandGlob } from "@std/fs";
 import type {
+  ExcludeConfig,
   ExecutionContext,
   SymlinkResult,
   SymlinksConfig,
 } from "./types.ts";
+
+/**
+ * Default patterns to exclude from recursive glob matching.
+ * These are commonly large directories that should not be traversed.
+ */
+const DEFAULT_EXCLUDE_PATTERNS = [
+  "**/node_modules/**",
+  "**/.git/**",
+  "**/dist/**",
+  "**/build/**",
+  "**/.next/**",
+  "**/.turbo/**",
+  "**/.vercel/**",
+  "**/.conductor/**",
+];
+
+/**
+ * Compute the effective exclusion patterns based on configuration.
+ * If no exclude config is provided, returns default patterns.
+ * If replaceDefaults is true, only returns user-provided patterns.
+ * Otherwise, combines defaults with user-provided patterns.
+ */
+function getEffectiveExclusions(exclude?: ExcludeConfig): string[] {
+  if (!exclude) return [...DEFAULT_EXCLUDE_PATTERNS];
+  if (exclude.replaceDefaults) return exclude.patterns;
+  return [...DEFAULT_EXCLUDE_PATTERNS, ...exclude.patterns];
+}
 
 /**
  * Check if a path exists
@@ -247,15 +275,25 @@ async function processNormalSymlink(
   pattern: string,
   dryRun: boolean,
   verbose: boolean,
+  exclude: string[],
 ): Promise<SymlinkResult[]> {
   const results: SymlinkResult[] = [];
+
+  // Only apply exclusions for recursive glob patterns to avoid
+  // unnecessarily filtering specific path patterns
+  const shouldExclude = pattern.includes("**");
 
   // Expand the glob pattern from the root path
   const globOptions = {
     root: rootPath,
     includeDirs: true,
     followSymlinks: false,
+    exclude: shouldExclude ? exclude : undefined,
   };
+
+  if (verbose && shouldExclude) {
+    console.log(`  Applying ${exclude.length} exclusion patterns`);
+  }
 
   let matchCount = 0;
   for await (const entry of expandGlob(pattern, globOptions)) {
@@ -308,6 +346,9 @@ export async function processSymlinks(
 
   // Process normal symlinks
   if (symlinks.normal) {
+    // Compute effective exclusions once for all normal symlinks
+    const exclude = getEffectiveExclusions(symlinks.exclude);
+
     for (const normal of symlinks.normal) {
       if (options.verbose) {
         console.log(`Processing normal symlink pattern: ${normal.pattern}`);
@@ -318,6 +359,7 @@ export async function processSymlinks(
         normal.pattern,
         options.dryRun,
         options.verbose,
+        exclude,
       );
       results.push(...normalResults);
     }

@@ -1,6 +1,6 @@
 {
-  "name": "@wyattjoh/train-conductor",
-  "version": "0.2.0",
+  "name": "@wyattjoh/conduit",
+  "version": "0.3.0",
   "license": "MIT",
   "exports": "./src/main.ts",
   "publish": {
@@ -9,8 +9,8 @@
   },
   "tasks": {
     "dev": "deno run --allow-read --allow-write --allow-run --allow-env src/main.ts",
-    "compile": "deno compile --allow-read --allow-write --allow-run --allow-env -o train-conductor src/main.ts",
-    "install": "deno install --global --force --allow-read --allow-write --allow-run --allow-env --config deno.json -n train-conductor src/main.ts",
+    "compile": "deno compile --allow-read --allow-write --allow-run --allow-env -o conduit src/main.ts",
+    "install": "deno install --global --force --allow-read --allow-write --allow-run --allow-env --config deno.json -n conduit src/main.ts",
     "check": "deno check src/main.ts",
     "fmt": "deno fmt",
     "lint": "deno lint",

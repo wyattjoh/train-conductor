@@ -20,6 +20,16 @@ export interface NormalSymlinkConfig {
 }
 
 /**
+ * Exclusion configuration for glob patterns
+ */
+export interface ExcludeConfig {
+  /** Glob patterns to exclude from matching */
+  patterns: string[];
+  /** If true, replace default exclusions instead of extending them */
+  replaceDefaults?: boolean;
+}
+
+/**
  * Symlinks configuration section
  */
 export interface SymlinksConfig {
@@ -27,6 +37,8 @@ export interface SymlinksConfig {
   tree?: TreeSymlinkConfig[];
   /** Normal symlinks (direct file/glob patterns) */
   normal?: NormalSymlinkConfig[];
+  /** Exclusion patterns for glob matching (applies to normal symlinks with **) */
+  exclude?: ExcludeConfig;
 }
 
 /**
@@ -80,7 +92,7 @@ export interface CliOptions {
   /** Run only specific operations */
   only?: string[];
   /** Run across all git worktrees */
-  workspaces: boolean;
+  worktrees: boolean;
   /** Override config file path */
   configPath?: string;
   /** Dry run mode - show what would be done */

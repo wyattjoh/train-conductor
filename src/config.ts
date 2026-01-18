@@ -4,13 +4,50 @@
 
 import { parse as parseToml } from "@std/toml";
 import { join } from "@std/path";
-import type { Config, ScriptConfig, SymlinksConfig } from "./types.ts";
+import type {
+  Config,
+  ExcludeConfig,
+  ScriptConfig,
+  SymlinksConfig,
+} from "./types.ts";
 
 /** Default config file name */
 export const CONFIG_FILE_NAME = ".conductor.local.toml";
 
 /** Operation name for symlinks (used across the codebase) */
 export const SYMLINKS_OPERATION = "symlinks";
+
+/**
+ * Validate and normalize the exclude configuration.
+ */
+function validateExclude(raw: unknown): ExcludeConfig | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+
+  const exclude = raw as Record<string, unknown>;
+
+  if (!Array.isArray(exclude.patterns)) {
+    throw new Error("symlinks.exclude.patterns must be an array of strings");
+  }
+
+  const patterns = exclude.patterns.map((item, index) => {
+    if (typeof item !== "string") {
+      throw new Error(`symlinks.exclude.patterns[${index}] must be a string`);
+    }
+    return item;
+  });
+
+  const result: ExcludeConfig = { patterns };
+
+  if (typeof exclude.replaceDefaults === "boolean") {
+    result.replaceDefaults = exclude.replaceDefaults;
+  } else if (exclude.replaceDefaults !== undefined) {
+    throw new Error("symlinks.exclude.replaceDefaults must be a boolean");
+  }
+
+  return result;
+}
 
 /**
  * Validate and normalize the symlinks configuration.
@@ -63,6 +100,8 @@ function validateSymlinks(raw: unknown): SymlinksConfig | undefined {
       return { pattern: obj.pattern };
     });
   }
+
+  result.exclude = validateExclude(symlinks.exclude);
 
   return result;
 }
@@ -226,8 +265,8 @@ export async function loadConfigStandalone(
 }
 
 /** Default configuration template for init command */
-export const DEFAULT_CONFIG_TEMPLATE = `# train-conductor configuration
-# See: https://github.com/wyattjoh/train-conductor
+export const DEFAULT_CONFIG_TEMPLATE = `# conduit configuration
+# See: https://github.com/wyattjoh/conduit
 
 # Symlinks to create from main worktree to secondary worktrees
 [symlinks]
@@ -236,6 +275,12 @@ export const DEFAULT_CONFIG_TEMPLATE = `# train-conductor configuration
 
 # Normal symlinks use glob patterns for files/directories
 # normal = [".env", "*.local.*"]
+
+# Exclusions for recursive glob patterns (** patterns)
+# Default exclusions: node_modules, .git, dist, build, .next, .turbo, .vercel, .conductor
+# [symlinks.exclude]
+# patterns = ["**/legacy/**"]      # Add to defaults
+# replaceDefaults = false          # Set true to replace defaults entirely
 
 # Scripts to run after symlinks are created
 # [[scripts]]

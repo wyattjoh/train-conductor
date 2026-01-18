@@ -1,7 +1,7 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-run --allow-env
 
 /**
- * train-conductor - Worktree setup tool
+ * conduit - Worktree setup tool
  *
  * A CLI tool for setting up git worktrees with symlinks and scripts
  * configured via .conductor.local.toml
@@ -35,10 +35,10 @@ const VERSION = denoConfig.version;
 /** Generate help text with version */
 function getHelpText(version: string): string {
   return `
-🚂 ${bold("train-conductor")} - Worktree setup tool v${version}
+🔗 ${bold("conduit")} - Worktree setup tool v${version}
 
 ${bold("USAGE:")}
-  train-conductor <command> [OPTIONS]
+  conduit <command> [OPTIONS]
 
 ${bold("COMMANDS:")}
   setup       Run worktree setup (symlinks + scripts)
@@ -50,20 +50,20 @@ ${bold("OPTIONS:")}
   -i, --interactive       Select operations via interactive menu (setup only)
   -o, --only <list>       Run only specific operations (setup only)
                           Values: symlinks, <script-name>, all
-  -w, --workspaces        Run across all git worktrees (setup only)
+  -w, --worktrees         Run across all git worktrees (setup only)
   -c, --config <path>     Override config file path
   -n, --dry-run           Show what would be done without changes (setup only)
   -v, --verbose           Verbose output
       --version           Show version number
 
 ${bold("EXAMPLES:")}
-  train-conductor setup                 # Run all: symlinks + all scripts
-  train-conductor setup -o symlinks     # Symlinks only
-  train-conductor setup -w              # Run in all worktrees
-  train-conductor setup -i              # Interactive mode
-  train-conductor setup -n              # Dry run
-  train-conductor validate              # Validate config file
-  train-conductor init                  # Create default config
+  conduit setup                 # Run all: symlinks + all scripts
+  conduit setup -o symlinks     # Symlinks only
+  conduit setup -w              # Run in all worktrees
+  conduit setup -i              # Interactive mode
+  conduit setup -n              # Dry run
+  conduit validate              # Validate config file
+  conduit init                  # Create default config
 
 ${bold("CONFIGURATION:")}
   Create a .conductor.local.toml file in your repository root.
@@ -79,7 +79,7 @@ function parseCliArgs(args: string[]): CliOptions {
     boolean: [
       "help",
       "interactive",
-      "workspaces",
+      "worktrees",
       "dry-run",
       "verbose",
       "version",
@@ -89,7 +89,7 @@ function parseCliArgs(args: string[]): CliOptions {
       h: "help",
       i: "interactive",
       o: "only",
-      w: "workspaces",
+      w: "worktrees",
       c: "config",
       n: "dry-run",
       v: "verbose",
@@ -105,7 +105,7 @@ function parseCliArgs(args: string[]): CliOptions {
     only: parsed.only
       ? parsed.only.split(",").map((s: string) => s.trim())
       : undefined,
-    workspaces: parsed.workspaces ?? false,
+    worktrees: parsed.worktrees ?? false,
     configPath: parsed.config,
     dryRun: parsed["dry-run"] ?? false,
     verbose: parsed.verbose ?? false,
@@ -273,7 +273,7 @@ async function main(): Promise<void> {
 
   // Handle --version (check for explicit version flag in args)
   if (Deno.args.includes("--version")) {
-    console.log(`🚂 train-conductor v${VERSION}`);
+    console.log(`🔗 conduit v${VERSION}`);
     Deno.exit(0);
   }
 
@@ -295,7 +295,7 @@ async function main(): Promise<void> {
     } else {
       console.error(red("Error: ") + "No command specified");
     }
-    console.error(gray("Run 'train-conductor --help' for usage information."));
+    console.error(gray("Run 'conduit --help' for usage information."));
     Deno.exit(1);
   }
 
@@ -317,16 +317,16 @@ async function main(): Promise<void> {
   // Check if we're in the main worktree
   const isMainWorktree = rootPath === currentPath;
 
-  if (isMainWorktree && !options.workspaces) {
+  if (isMainWorktree && !options.worktrees) {
     console.log(
       yellow("Note: ") +
-        "You're in the main worktree. Use --workspaces to run in all worktrees.",
+        "You're in the main worktree. Use --worktrees to run in all worktrees.",
     );
     console.log(gray("Nothing to do in main worktree."));
     Deno.exit(0);
   }
 
-  if (options.workspaces) {
+  if (options.worktrees) {
     // Run in all non-main worktrees
     const worktrees = await getNonMainWorktrees();
 
@@ -336,7 +336,7 @@ async function main(): Promise<void> {
     }
 
     console.log(
-      `🚂 ${bold(`Running setup in ${worktrees.length} worktree(s):`)}`,
+      `🔗 ${bold(`Running setup in ${worktrees.length} worktree(s):`)}`,
     );
 
     // For interactive mode, get operations once
@@ -384,7 +384,7 @@ async function main(): Promise<void> {
     }
   } else {
     // Run in current worktree only
-    console.log(`🚂 ${bold(`Setting up worktree: ${currentPath}`)}`);
+    console.log(`🔗 ${bold(`Setting up worktree: ${currentPath}`)}`);
 
     if (options.dryRun) {
       console.log(gray("[dry-run mode - no changes will be made]"));

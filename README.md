@@ -1,9 +1,9 @@
-# 🚂 train-conductor
+# 🔗 conduit
 
-A CLI tool for setting up git worktrees with symlinks and scripts.
-train-conductor reads configuration from `.conductor.local.toml` in your
-repository root and creates symlinks from the main worktree to secondary
-worktrees, with support for running post-setup scripts.
+A CLI tool for setting up git worktrees with symlinks and scripts. conduit reads
+configuration from `.conductor.local.toml` in your repository root and creates
+symlinks from the main worktree to secondary worktrees, with support for running
+post-setup scripts.
 
 ## Features
 
@@ -12,7 +12,7 @@ worktrees, with support for running post-setup scripts.
 - **Normal symlinks**: Glob-based file/directory linking for simple patterns
 - **Post-setup scripts**: Run shell commands after symlinking (e.g.,
   `npm install`)
-- **Workspace mode**: Run setup across all git worktrees at once
+- **Worktree mode**: Run setup across all git worktrees at once
 - **Interactive mode**: Select which operations to run via a menu
 - **Dry-run mode**: Preview changes without making them
 
@@ -23,21 +23,21 @@ worktrees, with support for running post-setup scripts.
 Requires [Deno](https://deno.land/) v2.0 or later.
 
 ```bash
-deno install -g --allow-read --allow-write --allow-run --allow-env -n train-conductor jsr:@wyattjoh/train-conductor
+deno install -g --allow-read --allow-write --allow-run --allow-env -n conduit jsr:@wyattjoh/conduit
 ```
 
 ### Run without installing
 
 ```bash
-deno run --allow-read --allow-write --allow-run --allow-env jsr:@wyattjoh/train-conductor setup
+deno run --allow-read --allow-write --allow-run --allow-env jsr:@wyattjoh/conduit setup
 ```
 
 ### From source
 
 ```bash
 # Clone the repository
-git clone https://github.com/wyattjoh/train-conductor.git
-cd train-conductor
+git clone https://github.com/wyattjoh/conduit.git
+cd conduit
 
 # Install globally
 deno task install
@@ -49,13 +49,13 @@ deno task install
 deno task compile
 
 # Move to your PATH
-mv train-conductor ~/.local/bin/
+mv conduit ~/.local/bin/
 ```
 
 ## Usage
 
 ```
-train-conductor <command> [OPTIONS]
+conduit <command> [OPTIONS]
 
 COMMANDS:
   setup       Run worktree setup (symlinks + scripts)
@@ -67,7 +67,7 @@ OPTIONS:
   -i, --interactive       Select operations via interactive menu (setup only)
   -o, --only <list>       Run only specific operations (setup only)
                           Values: symlinks, <script-name>, all
-  -w, --workspaces        Run across all git worktrees (setup only)
+  -w, --worktrees         Run across all git worktrees (setup only)
   -c, --config <path>     Override config file path
   -n, --dry-run           Show what would be done without changes (setup only)
   -v, --verbose           Verbose output
@@ -78,28 +78,28 @@ OPTIONS:
 
 ```bash
 # Create a default configuration file
-train-conductor init
+conduit init
 
 # Validate the configuration file
-train-conductor validate
+conduit validate
 
 # Run all operations (symlinks + all scripts)
-train-conductor setup
+conduit setup
 
 # Symlinks only
-train-conductor setup -o symlinks
+conduit setup -o symlinks
 
 # Symlinks + specific script
-train-conductor setup -o symlinks,install
+conduit setup -o symlinks,install
 
 # Run in all worktrees
-train-conductor setup -w
+conduit setup -w
 
 # Interactive mode
-train-conductor setup -i
+conduit setup -i
 
 # Dry run (preview changes)
-train-conductor setup -n
+conduit setup -n
 ```
 
 ## Configuration
@@ -174,8 +174,7 @@ Scripts run in order after symlinks are created. Each script can have:
 executed directly via `bash -c`. Treat this file as executable code:
 
 - Only use configuration files from sources you trust
-- Review the `[[scripts]]` section before running `train-conductor` in a new
-  repository
+- Review the `[[scripts]]` section before running `conduit` in a new repository
 - Consider adding `.conductor.local.toml` to `.gitignore` if it contains
   environment-specific commands
 

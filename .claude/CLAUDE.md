@@ -5,10 +5,10 @@ code in this repository.
 
 ## Project Overview
 
-train-conductor is a Deno CLI tool for setting up git worktrees with symlinks
-and scripts. It reads configuration from `.conductor.local.toml` in the
-repository root and creates symlinks from the main worktree to secondary
-worktrees, with support for running post-setup scripts.
+conduit is a Deno CLI tool for setting up git worktrees with symlinks and
+scripts. It reads configuration from `.conductor.local.toml` in the repository
+root and creates symlinks from the main worktree to secondary worktrees, with
+support for running post-setup scripts.
 
 ## Commands
 
