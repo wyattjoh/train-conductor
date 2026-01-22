@@ -16,6 +16,7 @@ import {
   DEFAULT_CONFIG_TEMPLATE,
   loadConfig,
   loadConfigStandalone,
+  loadUserConfig,
   SYMLINKS_OPERATION,
 } from "./config.ts";
 import {
@@ -181,14 +182,16 @@ async function runSetupInWorktree(
   options: CliOptions,
   operations?: string[],
 ): Promise<boolean> {
-  // Load config from root path
+  // Load config from root path and user config
   const config = await loadConfig(options.configPath, rootPath);
+  const userConfig = await loadUserConfig();
 
   // Create execution context
   const ctx: ExecutionContext = {
     rootPath,
     worktreePath,
     config,
+    userConfig,
     options,
   };
 
@@ -236,7 +239,7 @@ async function runSetupInWorktree(
   if (selectedOps.includes(SYMLINKS_OPERATION)) {
     console.log(`\n${bold("→")} Creating symlinks`);
     const symlinkResults = await processSymlinks(ctx);
-    printSymlinkSummary(symlinkResults, options.verbose);
+    printSymlinkSummary(symlinkResults, options.verbose, options.dryRun);
 
     const hasErrors = symlinkResults.some((r) => r.action === "error");
     if (hasErrors) {

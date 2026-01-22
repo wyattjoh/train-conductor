@@ -9,10 +9,17 @@ import type {
   ExcludeConfig,
   ScriptConfig,
   SymlinksConfig,
+  UserConfig,
 } from "./types.ts";
 
 /** Default config file name */
 export const CONFIG_FILE_NAME = ".conductor.local.toml";
+
+/** User config file path */
+export const USER_CONFIG_PATH = join(
+  Deno.env.get("HOME") ?? "~",
+  CONFIG_FILE_NAME,
+);
 
 /** Operation name for symlinks (used across the codebase) */
 export const SYMLINKS_OPERATION = "symlinks";
@@ -289,3 +296,58 @@ export const DEFAULT_CONFIG_TEMPLATE = `# conduit configuration
 # command = "npm install"
 # optional = false
 `;
+
+/**
+ * Validate and normalize user configuration
+ */
+function validateUserConfig(raw: unknown): UserConfig {
+  if (!raw || typeof raw !== "object") {
+    return {};
+  }
+
+  const obj = raw as Record<string, unknown>;
+  const config: UserConfig = {};
+
+  if (Array.isArray(obj.excludes)) {
+    config.excludes = obj.excludes.map((item, index) => {
+      if (typeof item !== "string") {
+        throw new Error(`excludes[${index}] must be a string`);
+      }
+      return item;
+    });
+  } else if (obj.excludes !== undefined) {
+    throw new Error("excludes must be an array of strings");
+  }
+
+  return config;
+}
+
+/**
+ * Load user-level configuration from ~/.conductor.local.toml
+ * Returns empty config if file doesn't exist (non-fatal)
+ */
+export async function loadUserConfig(): Promise<UserConfig> {
+  let content: string;
+  try {
+    content = await Deno.readTextFile(USER_CONFIG_PATH);
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) {
+      // User config is optional, return empty
+      return {};
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to read user configuration: ${message}`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = parseToml(content);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to parse user configuration (${USER_CONFIG_PATH}): ${message}`,
+    );
+  }
+
+  return validateUserConfig(parsed);
+}

@@ -68,6 +68,14 @@ export interface Config {
 }
 
 /**
+ * User-level configuration (~/.conductor.local.toml)
+ */
+export interface UserConfig {
+  /** Global exclude patterns to merge with project excludes */
+  excludes?: string[];
+}
+
+/**
  * Parsed worktree information from git
  */
 export interface Worktree {
@@ -145,6 +153,8 @@ export interface ExecutionContext {
   worktreePath: string;
   /** Parsed configuration */
   config: Config;
+  /** User-level configuration */
+  userConfig: UserConfig;
   /** CLI options */
   options: CliOptions;
 }

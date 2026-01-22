@@ -2,13 +2,15 @@
  * Symlink operations for tree and normal symlinks
  */
 
-import { dirname, join, relative } from "@std/path";
+import { dirname, globToRegExp, join, relative } from "@std/path";
 import { ensureDir, expandGlob } from "@std/fs";
+import { gray } from "@std/fmt/colors";
 import type {
   ExcludeConfig,
   ExecutionContext,
   SymlinkResult,
   SymlinksConfig,
+  UserConfig,
 } from "./types.ts";
 
 /**
@@ -28,70 +30,164 @@ const DEFAULT_EXCLUDE_PATTERNS = [
 
 /**
  * Compute the effective exclusion patterns based on configuration.
- * If no exclude config is provided, returns default patterns.
- * If replaceDefaults is true, only returns user-provided patterns.
- * Otherwise, combines defaults with user-provided patterns.
+ * Merges defaults, user-level excludes, and project-level excludes.
+ * If replaceDefaults is true on project config, only uses project patterns.
  */
-function getEffectiveExclusions(exclude?: ExcludeConfig): string[] {
-  if (!exclude) return [...DEFAULT_EXCLUDE_PATTERNS];
-  if (exclude.replaceDefaults) return exclude.patterns;
-  return [...DEFAULT_EXCLUDE_PATTERNS, ...exclude.patterns];
+function getEffectiveExclusions(
+  userConfig: UserConfig,
+  exclude?: ExcludeConfig,
+): string[] {
+  const userExcludes = userConfig.excludes ?? [];
+
+  if (!exclude) {
+    return [...DEFAULT_EXCLUDE_PATTERNS, ...userExcludes];
+  }
+  if (exclude.replaceDefaults) {
+    return exclude.patterns;
+  }
+  return [...DEFAULT_EXCLUDE_PATTERNS, ...userExcludes, ...exclude.patterns];
 }
 
 /**
- * Check if a path exists
+ * Pre-compile glob patterns to RegExp for efficient repeated matching.
+ * This avoids recompiling patterns for every path check.
  */
-async function pathExists(path: string): Promise<boolean> {
+function compileExcludePatterns(patterns: string[]): RegExp[] {
+  return patterns.map((pattern) =>
+    globToRegExp(pattern, { extended: true, globstar: true })
+  );
+}
+
+/**
+ * Check if a relative path should be excluded based on pre-compiled patterns.
+ */
+function shouldExclude(
+  relativePath: string,
+  compiledPatterns: RegExp[],
+): boolean {
+  return compiledPatterns.some((regex) => regex.test(relativePath));
+}
+
+/**
+ * Information about a filesystem path, gathered in a single operation.
+ */
+interface PathInfo {
+  exists: boolean;
+  isSymlink: boolean;
+  isDirectory: boolean;
+  linkTarget: string | null;
+}
+
+/**
+ * Get comprehensive path information in minimal stat calls.
+ * Returns all info needed for symlink decisions in one lookup.
+ */
+async function getPathInfo(path: string): Promise<PathInfo> {
   try {
-    await Deno.lstat(path);
-    return true;
+    const lstatResult = await Deno.lstat(path);
+    const isSymlink = lstatResult.isSymlink;
+
+    // For symlinks, we need to read the link target
+    // For real directories, use lstat result; for symlinks, check what they point to
+    let isDirectory = lstatResult.isDirectory;
+    let linkTarget: string | null = null;
+
+    if (isSymlink) {
+      linkTarget = await Deno.readLink(path);
+      // Check if symlink points to a directory
+      try {
+        const statResult = await Deno.stat(path);
+        isDirectory = statResult.isDirectory;
+      } catch {
+        // Broken symlink - target doesn't exist
+        isDirectory = false;
+      }
+    }
+
+    return { exists: true, isSymlink, isDirectory, linkTarget };
   } catch {
-    return false;
+    return {
+      exists: false,
+      isSymlink: false,
+      isDirectory: false,
+      linkTarget: null,
+    };
   }
 }
 
 /**
- * Check if a path is a symlink
+ * Execute async functions with a concurrency limit.
+ * Processes items in parallel up to the limit, collecting all results.
  */
-async function isSymlink(path: string): Promise<boolean> {
-  try {
-    const stat = await Deno.lstat(path);
-    return stat.isSymlink;
-  } catch {
-    return false;
+async function parallelLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  let index = 0;
+
+  async function worker(): Promise<void> {
+    while (index < items.length) {
+      const currentIndex = index++;
+      const result = await fn(items[currentIndex]);
+      results[currentIndex] = result;
+    }
   }
+
+  // Create workers up to the limit
+  const workers = Array(Math.min(limit, items.length))
+    .fill(null)
+    .map(() => worker());
+
+  await Promise.all(workers);
+  return results;
 }
 
 /**
- * Check if a path is a directory
+ * Filter out paths that are children of other paths in the list.
+ * When a directory and its contents both match a glob, keep only the directory.
  */
-async function isDirectory(path: string): Promise<boolean> {
-  try {
-    const stat = await Deno.stat(path);
-    return stat.isDirectory;
-  } catch {
-    return false;
+function filterParentChildConflicts(paths: string[]): string[] {
+  if (paths.length <= 1) return paths;
+
+  // Sort by length (shortest first) so directories come before their contents
+  const sorted = [...paths].sort((a, b) => a.length - b.length);
+  const result: string[] = [];
+  const parentPaths = new Set<string>();
+
+  for (const path of sorted) {
+    // Check if any existing path is a parent of this one
+    let hasParent = false;
+    for (const parent of parentPaths) {
+      if (path.startsWith(parent + "/")) {
+        hasParent = true;
+        break;
+      }
+    }
+
+    if (!hasParent) {
+      result.push(path);
+      parentPaths.add(path);
+    }
   }
+
+  return result;
 }
 
 /**
- * Get the target of a symlink
- */
-async function readSymlink(path: string): Promise<string | null> {
-  try {
-    return await Deno.readLink(path);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Create a symlink from source to target
+ * Create a symlink from source to target using optimistic approach.
+ * Tries to create symlink first, only stats on failure (saves syscalls in common case).
+ *
+ * @param sourceExists - If true, skip checking if source exists (caller verified via readdir)
+ * @param targetInfo - Pre-fetched target info to avoid redundant stat calls
  */
 async function createSymlink(
   source: string,
   target: string,
   dryRun: boolean,
+  sourceExists?: boolean,
+  targetInfo?: PathInfo,
 ): Promise<SymlinkResult> {
   const result: SymlinkResult = {
     source,
@@ -100,36 +196,36 @@ async function createSymlink(
     action: "created",
   };
 
-  // Check if source exists
-  if (!(await pathExists(source))) {
-    return {
-      ...result,
-      success: false,
-      action: "error",
-      reason: `Source does not exist: ${source}`,
-    };
+  // Only check source if caller hasn't verified it
+  if (!sourceExists) {
+    const sourceInfo = await getPathInfo(source);
+    if (!sourceInfo.exists) {
+      return {
+        ...result,
+        success: false,
+        action: "error",
+        reason: `Source does not exist: ${source}`,
+      };
+    }
   }
 
-  // Check if target already exists
-  if (await pathExists(target)) {
-    // If it's already a symlink pointing to the same source, skip
-    if (await isSymlink(target)) {
-      const currentTarget = await readSymlink(target);
-      if (currentTarget === source) {
+  // If targetInfo provided, we already know target exists - handle skip cases
+  if (targetInfo?.exists) {
+    if (targetInfo.isSymlink) {
+      if (targetInfo.linkTarget === source) {
         return {
           ...result,
           action: "skipped",
           reason: "Symlink already exists and points to correct source",
         };
       }
-      // Different target - consider this an override that should be preserved
       return {
         ...result,
         action: "skipped",
-        reason: `Existing symlink points to different target: ${currentTarget}`,
+        reason:
+          `Existing symlink points to different target: ${targetInfo.linkTarget}`,
       };
     }
-    // It's a real file/directory - preserve local override
     return {
       ...result,
       action: "skipped",
@@ -138,26 +234,84 @@ async function createSymlink(
   }
 
   if (dryRun) {
+    // In dry-run, we need to check if target exists to report accurately
+    if (!targetInfo) {
+      const info = await getPathInfo(target);
+      if (info.exists) {
+        if (info.isSymlink && info.linkTarget === source) {
+          return {
+            ...result,
+            action: "skipped",
+            reason: "Symlink already exists and points to correct source",
+          };
+        }
+        if (info.isSymlink) {
+          return {
+            ...result,
+            action: "skipped",
+            reason:
+              `Existing symlink points to different target: ${info.linkTarget}`,
+          };
+        }
+        return {
+          ...result,
+          action: "skipped",
+          reason: "Local file/directory exists (preserving local override)",
+        };
+      }
+    }
+    console.log(`  ${gray("[dry-run]")} Would create: ${target}`);
     return result;
   }
 
-  // Ensure parent directory exists
-  try {
-    await ensureDir(dirname(target));
-  } catch (error) {
-    return {
-      ...result,
-      success: false,
-      action: "error",
-      reason: `Failed to create parent directory: ${error}`,
-    };
-  }
-
-  // Create the symlink
+  // Optimistic approach: try to create symlink first
+  // This saves a stat call in the common case where target doesn't exist
   try {
     await Deno.symlink(source, target);
     return result;
   } catch (error) {
+    // If symlink failed, check why
+    if (error instanceof Deno.errors.AlreadyExists) {
+      // Target exists - stat it to determine skip reason
+      const info = await getPathInfo(target);
+      if (info.isSymlink) {
+        if (info.linkTarget === source) {
+          return {
+            ...result,
+            action: "skipped",
+            reason: "Symlink already exists and points to correct source",
+          };
+        }
+        return {
+          ...result,
+          action: "skipped",
+          reason:
+            `Existing symlink points to different target: ${info.linkTarget}`,
+        };
+      }
+      return {
+        ...result,
+        action: "skipped",
+        reason: "Local file/directory exists (preserving local override)",
+      };
+    }
+
+    if (error instanceof Deno.errors.NotFound) {
+      // Parent directory doesn't exist - create it and retry
+      try {
+        await ensureDir(dirname(target));
+        await Deno.symlink(source, target);
+        return result;
+      } catch (retryError) {
+        return {
+          ...result,
+          success: false,
+          action: "error",
+          reason: `Failed to create symlink: ${retryError}`,
+        };
+      }
+    }
+
     return {
       ...result,
       success: false,
@@ -167,12 +321,18 @@ async function createSymlink(
   }
 }
 
+/** Concurrency limit for parallel file operations */
+const PARALLEL_LIMIT = 100;
+
 /**
  * Process tree symlinks - recursively link directory contents
  * preserving any local overrides in the target.
  *
  * This creates symlinks at the leaf level (files) rather than
  * at the directory level, allowing local files to override.
+ *
+ * Uses pre-compiled exclusion patterns and parallel processing for efficiency.
+ * Minimizes stat calls by trusting readdir's file type information.
  */
 async function processTreeSymlink(
   rootPath: string,
@@ -180,105 +340,114 @@ async function processTreeSymlink(
   relativePath: string,
   dryRun: boolean,
   verbose: boolean,
+  compiledExclude: RegExp[],
 ): Promise<SymlinkResult[]> {
-  const results: SymlinkResult[] = [];
   const sourcePath = join(rootPath, relativePath);
-  const targetPath = join(worktreePath, relativePath);
 
-  // If source doesn't exist, nothing to do
-  if (!(await pathExists(sourcePath))) {
+  // Try to read directory - if it fails, source doesn't exist or isn't a directory
+  let entries: Deno.DirEntry[];
+  try {
+    entries = [];
+    for await (const entry of Deno.readDir(sourcePath)) {
+      entries.push(entry);
+    }
+  } catch (error) {
+    // Check if source exists but is a file (not a directory)
+    if (error instanceof Deno.errors.NotADirectory) {
+      const targetPath = join(worktreePath, relativePath);
+      const result = await createSymlink(sourcePath, targetPath, dryRun, true);
+      return [result];
+    }
+    // Source doesn't exist
     if (verbose) {
       console.log(`  Skipping ${relativePath}: source doesn't exist`);
     }
-    return results;
+    return [];
   }
 
-  // If source is not a directory, create a direct symlink
-  if (!(await isDirectory(sourcePath))) {
-    const result = await createSymlink(sourcePath, targetPath, dryRun);
-    results.push(result);
-    return results;
-  }
-
-  // It's a directory - recurse into it
-  for await (const entry of Deno.readDir(sourcePath)) {
+  // Process an entry and return its results
+  // Readdir already gives us file type - no need to stat source!
+  async function processEntry(
+    entry: Deno.DirEntry,
+  ): Promise<SymlinkResult[]> {
     const childRelative = join(relativePath, entry.name);
     const childSource = join(rootPath, childRelative);
     const childTarget = join(worktreePath, childRelative);
 
-    // If target already exists as a real file/directory, skip (preserve local)
-    if ((await pathExists(childTarget)) && !(await isSymlink(childTarget))) {
-      if (entry.isDirectory) {
-        // Recurse into existing directory to link contents
-        const childResults = await processTreeSymlink(
-          rootPath,
-          worktreePath,
-          childRelative,
-          dryRun,
-          verbose,
-        );
-        results.push(...childResults);
-      } else {
-        // File exists locally, skip it
-        results.push({
-          source: childSource,
-          target: childTarget,
-          success: true,
-          action: "skipped",
-          reason: "Local file exists (preserving local override)",
-        });
+    // Check if this entry should be excluded (fast regex check)
+    if (shouldExclude(childRelative, compiledExclude)) {
+      if (verbose) {
+        console.log(`  Skipping ${childRelative}: matches exclusion pattern`);
       }
-      continue;
+      return [];
     }
 
-    if (entry.isDirectory) {
-      // Check if target is a symlink to the source directory
-      if (await isSymlink(childTarget)) {
-        const linkTarget = await readSymlink(childTarget);
-        if (linkTarget === childSource) {
-          results.push({
-            source: childSource,
-            target: childTarget,
-            success: true,
-            action: "skipped",
-            reason: "Directory symlink already exists",
-          });
-          continue;
-        }
-      }
+    // For FILES: use optimistic approach - don't stat, just try to create symlink
+    // This saves a syscall for the common case where target doesn't exist
+    if (!entry.isDirectory) {
+      return [await createSymlink(childSource, childTarget, dryRun, true)];
+    }
 
-      // Recurse into the directory
-      const childResults = await processTreeSymlink(
+    // For DIRECTORIES: we need to stat target to decide how to handle
+    const targetInfo = await getPathInfo(childTarget);
+
+    // If target is a real directory (not symlink), recurse into it
+    if (targetInfo.exists && !targetInfo.isSymlink) {
+      return processTreeSymlink(
         rootPath,
         worktreePath,
         childRelative,
         dryRun,
         verbose,
+        compiledExclude,
       );
-      results.push(...childResults);
-    } else {
-      // It's a file - create symlink
-      const result = await createSymlink(childSource, childTarget, dryRun);
-      results.push(result);
     }
+
+    // If target is a symlink to the source directory, skip
+    if (targetInfo.isSymlink && targetInfo.linkTarget === childSource) {
+      return [
+        {
+          source: childSource,
+          target: childTarget,
+          success: true,
+          action: "skipped",
+          reason: "Directory symlink already exists",
+        },
+      ];
+    }
+
+    // Target doesn't exist or is a symlink to somewhere else - recurse
+    return processTreeSymlink(
+      rootPath,
+      worktreePath,
+      childRelative,
+      dryRun,
+      verbose,
+      compiledExclude,
+    );
   }
 
-  return results;
+  // Process all entries in parallel - files and dirs together
+  // This improves throughput by not waiting for all files before starting dirs
+  const resultArrays = await parallelLimit(
+    entries,
+    PARALLEL_LIMIT,
+    processEntry,
+  );
+
+  return resultArrays.flat();
 }
 
 /**
- * Process normal (glob-based) symlinks
+ * Collect matches for a normal (glob-based) symlink pattern.
+ * Returns source paths without creating symlinks.
  */
-async function processNormalSymlink(
+async function collectNormalSymlinkMatches(
   rootPath: string,
-  worktreePath: string,
   pattern: string,
-  dryRun: boolean,
   verbose: boolean,
   exclude: string[],
-): Promise<SymlinkResult[]> {
-  const results: SymlinkResult[] = [];
-
+): Promise<string[]> {
   // Only apply exclusions for recursive glob patterns to avoid
   // unnecessarily filtering specific path patterns
   const shouldExclude = pattern.includes("**");
@@ -295,30 +464,26 @@ async function processNormalSymlink(
     console.log(`  Applying ${exclude.length} exclusion patterns`);
   }
 
-  let matchCount = 0;
+  const matches: string[] = [];
   for await (const entry of expandGlob(pattern, globOptions)) {
-    matchCount++;
-    const relativePath = relative(rootPath, entry.path);
-    const targetPath = join(worktreePath, relativePath);
-
-    const result = await createSymlink(entry.path, targetPath, dryRun);
-    results.push(result);
+    matches.push(entry.path);
   }
 
-  if (verbose && matchCount === 0) {
+  if (verbose && matches.length === 0) {
     console.log(`  No matches found for pattern: ${pattern}`);
   }
 
-  return results;
+  return matches;
 }
 
 /**
- * Process all symlinks from configuration
+ * Process all symlinks from configuration.
+ * Uses pre-compiled patterns and parallel processing for efficiency.
  */
 export async function processSymlinks(
   ctx: ExecutionContext,
 ): Promise<SymlinkResult[]> {
-  const { rootPath, worktreePath, config, options } = ctx;
+  const { rootPath, worktreePath, config, userConfig, options } = ctx;
   const results: SymlinkResult[] = [];
 
   if (!config.symlinks) {
@@ -326,6 +491,12 @@ export async function processSymlinks(
   }
 
   const symlinks: SymlinksConfig = config.symlinks;
+
+  // Compute effective exclusions once for all symlinks
+  const excludePatterns = getEffectiveExclusions(userConfig, symlinks.exclude);
+
+  // Pre-compile exclusion patterns for tree symlink processing
+  const compiledExclude = compileExcludePatterns(excludePatterns);
 
   // Process tree symlinks
   if (symlinks.tree) {
@@ -339,30 +510,55 @@ export async function processSymlinks(
         tree.path,
         options.dryRun,
         options.verbose,
+        compiledExclude,
       );
       results.push(...treeResults);
     }
   }
 
-  // Process normal symlinks
+  // Process normal symlinks - collect all matches first, then filter and create
   if (symlinks.normal) {
-    // Compute effective exclusions once for all normal symlinks
-    const exclude = getEffectiveExclusions(symlinks.exclude);
-
-    for (const normal of symlinks.normal) {
-      if (options.verbose) {
+    // Collect all matches from all patterns in parallel
+    if (options.verbose) {
+      for (const normal of symlinks.normal) {
         console.log(`Processing normal symlink pattern: ${normal.pattern}`);
       }
-      const normalResults = await processNormalSymlink(
-        rootPath,
-        worktreePath,
-        normal.pattern,
-        options.dryRun,
-        options.verbose,
-        exclude,
-      );
-      results.push(...normalResults);
     }
+
+    const matchArrays = await Promise.all(
+      symlinks.normal.map((normal) =>
+        collectNormalSymlinkMatches(
+          rootPath,
+          normal.pattern,
+          options.verbose,
+          excludePatterns,
+        )
+      ),
+    );
+    const allMatches = matchArrays.flat();
+
+    // Filter out child paths when parent exists across all patterns
+    const filteredMatches = filterParentChildConflicts(allMatches);
+
+    if (options.verbose && filteredMatches.length < allMatches.length) {
+      console.log(
+        `Filtered ${
+          allMatches.length - filteredMatches.length
+        } child paths (parent takes precedence)`,
+      );
+    }
+
+    // Create symlinks for filtered matches in parallel
+    const symlinkResults = await parallelLimit(
+      filteredMatches,
+      PARALLEL_LIMIT,
+      (sourcePath) => {
+        const relativePath = relative(rootPath, sourcePath);
+        const targetPath = join(worktreePath, relativePath);
+        return createSymlink(sourcePath, targetPath, options.dryRun);
+      },
+    );
+    results.push(...symlinkResults);
   }
 
   return results;
@@ -374,10 +570,23 @@ export async function processSymlinks(
 export function printSymlinkSummary(
   results: SymlinkResult[],
   verbose: boolean,
+  dryRun: boolean,
 ): void {
+  const errors = results.filter((r) => r.action === "error");
+
+  // In dry-run mode, only print errors (dry-run messages already printed in createSymlink)
+  if (dryRun) {
+    if (errors.length > 0) {
+      console.log("  Errors:");
+      for (const error of errors) {
+        console.log(`    ${error.target}: ${error.reason}`);
+      }
+    }
+    return;
+  }
+
   const created = results.filter((r) => r.action === "created");
   const skipped = results.filter((r) => r.action === "skipped");
-  const errors = results.filter((r) => r.action === "error");
 
   if (verbose) {
     for (const result of results) {
